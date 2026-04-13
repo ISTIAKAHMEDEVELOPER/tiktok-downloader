@@ -1,10 +1,13 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import yt_dlp
+import requests
 import os
 
 app = Flask(__name__)
 CORS(app)
+
+RAPIDAPI_KEY = "4972eccafemshef0bdd86a834dc1p12e0fcjsn9504907a0150"
+RAPIDAPI_HOST = "tiktok-api-fast-reliable-data-scraper.p.rapidapi.com"
 
 @app.route('/')
 def home():
@@ -20,87 +23,63 @@ def download():
         return jsonify({'error': 'URL is required'}), 400
 
     try:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://www.tiktok.com/',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-            },
-            'extractor_args': {
-                'tiktok': {
-                    'webpage_download': True,
-                }
-            }
+        headers = {
+            "x-rapidapi-key": RAPIDAPI_KEY,
+            "x-rapidapi-host": RAPIDAPI_HOST,
+            "Content-Type": "application/json"
         }
 
+        # RapidAPI তে video info পাঠাও
+        api_url = f"https://{RAPIDAPI_HOST}/video/info"
+        params = {"video_url": url}
+
+        response = requests.get(api_url, headers=headers, params=params)
+        info = response.json()
+
+        if not info or 'data' not in info:
+            return jsonify({'error': 'Could not fetch video info. Try another link.'}), 400
+
+        video_data = info['data']
+
+        result = {
+            'title': video_data.get('title') or video_data.get('desc', 'TikTok Video'),
+            'thumbnail': video_data.get('cover') or video_data.get('thumbnail', ''),
+            'duration': video_data.get('duration', 0),
+            'formats': []
+        }
+
+        # No watermark MP4
+        nowm = video_data.get('play') or video_data.get('no_watermark') or video_data.get('video', {}).get('play_addr', {}).get('url_list', [None])[0]
+        if nowm:
+            result['formats'].append({
+                'url': nowm,
+                'quality': 'HD No Watermark',
+                'ext': 'mp4'
+            })
+
+        # With watermark MP4
+        wm = video_data.get('wmplay') or video_data.get('watermark')
+        if wm:
+            result['formats'].append({
+                'url': wm,
+                'quality': 'With Watermark',
+                'ext': 'mp4'
+            })
+
+        # MP3 audio
         if format_type == 'mp3':
-            ydl_opts['format'] = 'bestaudio/best'
-        else:
-            ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+            audio = video_data.get('music') or video_data.get('audio')
+            if audio:
+                result['formats'] = [{
+                    'url': audio,
+                    'quality': 'MP3 Audio',
+                    'ext': 'mp3'
+                }]
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        if not result['formats']:
+            return jsonify({'error': 'No download link found. Try another video.'}), 400
 
-            result = {
-                'title': info.get('title', 'TikTok Video'),
-                'thumbnail': info.get('thumbnail', ''),
-                'duration': info.get('duration', 0),
-                'formats': []
-            }
-
-            formats = info.get('formats', [])
-
-            if format_type == 'mp4':
-                # Try watermark-free first
-                for f in formats:
-                    furl = f.get('url', '')
-                    if furl and f.get('ext') == 'mp4' and 'watermark' not in f.get('format_id', '').lower():
-                        result['formats'].append({
-                            'url': furl,
-                            'quality': f.get('format_note') or f.get('height') and str(f['height'])+'p' or 'HD',
-                            'ext': 'mp4'
-                        })
-
-                # Fallback
-                if not result['formats']:
-                    for f in formats:
-                        furl = f.get('url', '')
-                        if furl and f.get('ext') == 'mp4':
-                            result['formats'].append({
-                                'url': furl,
-                                'quality': f.get('format_note') or 'HD',
-                                'ext': 'mp4'
-                            })
-
-            elif format_type == 'mp3':
-                for f in formats:
-                    furl = f.get('url', '')
-                    if furl and f.get('acodec') and f.get('acodec') != 'none':
-                        result['formats'].append({
-                            'url': furl,
-                            'quality': 'MP3',
-                            'ext': 'mp3'
-                        })
-
-            # Final fallback
-            if not result['formats']:
-                best_url = info.get('url') or info.get('webpage_url')
-                if best_url:
-                    result['formats'].append({
-                        'url': best_url,
-                        'quality': 'Best',
-                        'ext': format_type
-                    })
-
-            if not result['formats']:
-                return jsonify({'error': 'Could not extract download link. Try another video.'}), 400
-
-            # Return max 2 formats
-            result['formats'] = result['formats'][:2]
-            return jsonify(result)
+        return jsonify(result)
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
