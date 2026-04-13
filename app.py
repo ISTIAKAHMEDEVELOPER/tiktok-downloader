@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 import requests
 import os
@@ -80,6 +80,33 @@ def download():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/proxy')
+def proxy():
+    video_url = request.args.get('url')
+    if not video_url:
+        return jsonify({'error': 'URL required'}), 400
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://www.tiktok.com/'
+    }
+
+    r = requests.get(video_url, headers=headers, stream=True, timeout=30)
+    content_type = r.headers.get('Content-Type', 'video/mp4')
+
+    def generate():
+        for chunk in r.iter_content(chunk_size=8192):
+            yield chunk
+
+    response = Response(
+        stream_with_context(generate()),
+        content_type=content_type
+    )
+    response.headers['Content-Disposition'] = 'attachment'
+    return response
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
