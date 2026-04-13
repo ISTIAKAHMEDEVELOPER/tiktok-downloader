@@ -23,12 +23,23 @@ def download():
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://www.tiktok.com/',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+            },
+            'extractor_args': {
+                'tiktok': {
+                    'webpage_download': True,
+                }
+            }
         }
 
         if format_type == 'mp3':
             ydl_opts['format'] = 'bestaudio/best'
         else:
-            ydl_opts['format'] = 'best'
+            ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -40,31 +51,55 @@ def download():
                 'formats': []
             }
 
+            formats = info.get('formats', [])
+
             if format_type == 'mp4':
-                for f in info.get('formats', []):
-                    if f.get('url') and f.get('ext') == 'mp4':
+                # Try watermark-free first
+                for f in formats:
+                    furl = f.get('url', '')
+                    if furl and f.get('ext') == 'mp4' and 'watermark' not in f.get('format_id', '').lower():
                         result['formats'].append({
-                            'url': f['url'],
-                            'quality': f.get('format_note', 'HD'),
+                            'url': furl,
+                            'quality': f.get('format_note') or f.get('height') and str(f['height'])+'p' or 'HD',
                             'ext': 'mp4'
                         })
 
+                # Fallback
+                if not result['formats']:
+                    for f in formats:
+                        furl = f.get('url', '')
+                        if furl and f.get('ext') == 'mp4':
+                            result['formats'].append({
+                                'url': furl,
+                                'quality': f.get('format_note') or 'HD',
+                                'ext': 'mp4'
+                            })
+
             elif format_type == 'mp3':
-                for f in info.get('formats', []):
-                    if f.get('url') and 'audio' in f.get('format_note', '').lower():
+                for f in formats:
+                    furl = f.get('url', '')
+                    if furl and f.get('acodec') and f.get('acodec') != 'none':
                         result['formats'].append({
-                            'url': f['url'],
+                            'url': furl,
                             'quality': 'MP3',
                             'ext': 'mp3'
                         })
 
-            if not result['formats'] and info.get('url'):
-                result['formats'].append({
-                    'url': info['url'],
-                    'quality': 'Best',
-                    'ext': format_type
-                })
+            # Final fallback
+            if not result['formats']:
+                best_url = info.get('url') or info.get('webpage_url')
+                if best_url:
+                    result['formats'].append({
+                        'url': best_url,
+                        'quality': 'Best',
+                        'ext': format_type
+                    })
 
+            if not result['formats']:
+                return jsonify({'error': 'Could not extract download link. Try another video.'}), 400
+
+            # Return max 2 formats
+            result['formats'] = result['formats'][:2]
             return jsonify(result)
 
     except Exception as e:
