@@ -7,7 +7,6 @@ app = Flask(__name__)
 CORS(app)
 
 RAPIDAPI_KEY = "4972eccafemshef0bdd86a834dc1p12e0fcjsn9504907a0150"
-RAPIDAPI_HOST = "tiktok-api-fast-reliable-data-scraper.p.rapidapi.com"
 
 @app.route('/')
 def home():
@@ -23,61 +22,97 @@ def download():
         return jsonify({'error': 'URL is required'}), 400
 
     try:
-        headers = {
+        # API 1: tiktok-downloader-without-watermark
+        headers1 = {
             "x-rapidapi-key": RAPIDAPI_KEY,
-            "x-rapidapi-host": RAPIDAPI_HOST,
-            "Content-Type": "application/json"
+            "x-rapidapi-host": "tiktok-downloader-without-watermark.p.rapidapi.com"
         }
+        res1 = requests.get(
+            "https://tiktok-downloader-without-watermark.p.rapidapi.com/index",
+            headers=headers1,
+            params={"url": url}
+        )
+        info1 = res1.json()
 
-        # RapidAPI তে video info পাঠাও
-        api_url = f"https://{RAPIDAPI_HOST}/video/info"
-        params = {"video_url": url}
+        # Check if this API worked
+        video_url = None
+        audio_url = None
+        title = "TikTok Video"
+        thumbnail = ""
+        duration = 0
 
-        response = requests.get(api_url, headers=headers, params=params)
-        info = response.json()
+        if info1.get('video') and len(info1['video']) > 0:
+            video_url = info1['video'][0]
+            audio_url = info1.get('music', [None])[0]
+            title = info1.get('title', 'TikTok Video')
+            thumbnail = info1.get('cover', '')
 
-        if not info or 'data' not in info:
-            return jsonify({'error': 'Could not fetch video info. Try another link.'}), 400
+        # API 2: tiktok-scraper7 fallback
+        if not video_url:
+            headers2 = {
+                "x-rapidapi-key": RAPIDAPI_KEY,
+                "x-rapidapi-host": "tiktok-scraper7.p.rapidapi.com"
+            }
+            res2 = requests.get(
+                "https://tiktok-scraper7.p.rapidapi.com/video/info",
+                headers=headers2,
+                params={"url": url}
+            )
+            info2 = res2.json()
+            d = info2.get('data', {})
+            video_url = d.get('play') or d.get('wmplay')
+            audio_url = d.get('music')
+            title = d.get('title', 'TikTok Video')
+            thumbnail = d.get('cover', '')
+            duration = d.get('duration', 0)
 
-        video_data = info['data']
+        # API 3: tiktok-api-fast fallback
+        if not video_url:
+            headers3 = {
+                "x-rapidapi-key": RAPIDAPI_KEY,
+                "x-rapidapi-host": "tiktok-api-fast-reliable-data-scraper.p.rapidapi.com"
+            }
+            res3 = requests.get(
+                "https://tiktok-api-fast-reliable-data-scraper.p.rapidapi.com/video/info",
+                headers=headers3,
+                params={"video_url": url}
+            )
+            info3 = res3.json()
+            d = info3.get('data', {}) or info3
+            video_url = d.get('play') or d.get('download_url') or d.get('video_url')
+            audio_url = d.get('music') or d.get('audio')
+            title = d.get('title') or d.get('desc', 'TikTok Video')
+            thumbnail = d.get('cover') or d.get('thumbnail', '')
+            duration = d.get('duration', 0)
+
+        if not video_url and not audio_url:
+            return jsonify({'error': 'Could not fetch video. Please subscribe to the API or try another video.'}), 400
 
         result = {
-            'title': video_data.get('title') or video_data.get('desc', 'TikTok Video'),
-            'thumbnail': video_data.get('cover') or video_data.get('thumbnail', ''),
-            'duration': video_data.get('duration', 0),
+            'title': title,
+            'thumbnail': thumbnail,
+            'duration': duration,
             'formats': []
         }
 
-        # No watermark MP4
-        nowm = video_data.get('play') or video_data.get('no_watermark') or video_data.get('video', {}).get('play_addr', {}).get('url_list', [None])[0]
-        if nowm:
+        if format_type == 'mp3' and audio_url:
             result['formats'].append({
-                'url': nowm,
+                'url': audio_url,
+                'quality': 'MP3 Audio',
+                'ext': 'mp3'
+            })
+        elif video_url:
+            result['formats'].append({
+                'url': video_url,
                 'quality': 'HD No Watermark',
                 'ext': 'mp4'
             })
-
-        # With watermark MP4
-        wm = video_data.get('wmplay') or video_data.get('watermark')
-        if wm:
-            result['formats'].append({
-                'url': wm,
-                'quality': 'With Watermark',
-                'ext': 'mp4'
-            })
-
-        # MP3 audio
-        if format_type == 'mp3':
-            audio = video_data.get('music') or video_data.get('audio')
-            if audio:
-                result['formats'] = [{
-                    'url': audio,
+            if audio_url and format_type != 'mp3':
+                result['formats'].append({
+                    'url': audio_url,
                     'quality': 'MP3 Audio',
                     'ext': 'mp3'
-                }]
-
-        if not result['formats']:
-            return jsonify({'error': 'No download link found. Try another video.'}), 400
+                })
 
         return jsonify(result)
 
