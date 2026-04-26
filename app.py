@@ -36,6 +36,7 @@ def download():
             headers=headers,
             timeout=15
         )
+
         info = res.json()
 
         if info.get('code') != 0 or not info.get('data'):
@@ -56,24 +57,31 @@ def download():
             'formats': []
         }
 
-        if format_type == 'mp3' and audio_url:
-            result['formats'].append({
-                'url': audio_url,
-                'quality': 'MP3 Audio',
-                'ext': 'mp3'
-            })
+        if format_type == 'mp3':
+            # MP3 tab: return ONLY audio
+            if audio_url:
+                result['formats'].append({
+                    'url': audio_url,
+                    'quality': 'MP3 Audio',
+                    'ext': 'mp3'
+                })
         else:
+            # Video tab: return ONLY video (no audio mixed in)
+            # This was the root bug — returning both caused the frontend
+            # to show audio as a second "MP4" button
             if video_url:
                 result['formats'].append({
                     'url': video_url,
                     'quality': 'HD No Watermark',
                     'ext': 'mp4'
                 })
-            if audio_url:
+            # Also return a separate no-watermark SD as fallback if available
+            sd_url = d.get('play')
+            if sd_url and sd_url != video_url:
                 result['formats'].append({
-                    'url': audio_url,
-                    'quality': 'MP3 Audio',
-                    'ext': 'mp3'
+                    'url': sd_url,
+                    'quality': 'SD No Watermark',
+                    'ext': 'mp4'
                 })
 
         return jsonify(result)
@@ -85,6 +93,9 @@ def download():
 @app.route('/api/proxy')
 def proxy():
     video_url = request.args.get('url')
+    # Accept filename from query param (sent by frontend)
+    filename = request.args.get('filename', 'downloadtt-video.mp4')
+
     if not video_url:
         return jsonify({'error': 'URL required'}), 400
 
@@ -100,11 +111,15 @@ def proxy():
         for chunk in r.iter_content(chunk_size=8192):
             yield chunk
 
+    # Sanitize filename for Content-Disposition header
+    safe_filename = filename.replace('"', '').replace("'", '').replace('\n', '').replace('\r', '')
+
     response = Response(
         stream_with_context(generate()),
         content_type=content_type
     )
-    response.headers['Content-Disposition'] = 'attachment'
+    # Set proper Content-Disposition with the video title as filename
+    response.headers['Content-Disposition'] = f'attachment; filename="{safe_filename}"'
     return response
 
 
